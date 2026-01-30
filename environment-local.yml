@@ -1,0 +1,17 @@
+name: minerva-local
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - notebook
+  - ipykernel
+  # Libraries
+  - numpy
+  - matplotlib
+  - pytorch
+  - torchvision
+  - torchaudio
+  - cpuonly
