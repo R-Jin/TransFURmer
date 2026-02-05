@@ -1,0 +1,79 @@
+from torch.utils.data import Dataset
+from torchvision.io import read_file, decode_image
+from typing import List, Tuple
+import enum
+import os
+import re
+import torch
+
+class BufferType(str, enum.Enum):
+    Rasterized = "Rasterized"
+    SceneDepth = "SceneDepth"
+    LitPrimitive = "LitPrimitive"
+    GuideColored = "GuideColored"
+    WorldNormal = "WorldNormal"
+    Mask = "Mask"
+    HighQualityRender = "HighQualityRender"
+    
+class FurDataset(Dataset):
+    def __init__(self, scenes: list[str], buffer_types: list[BufferType], transforms=None):
+        self.scenes = scenes
+        self.buffer_types = buffer_types
+        self.index: List[Tuple[str, int]] = []
+        self.transforms = transforms    # (e.g. Rescale, Normalize, Random Crops, Flips)
+
+        # Find all frames for each scene filling self.index with (scene, frame) tuples
+        frame_re = re.compile(r"HighQualityRender(\d{4})\.png$") # Regex to match highquality render files and extract frame number
+        base_dir = os.path.join("synthetic_fur_images", "images", "with_ground_truth")
+        for scene in self.scenes:
+            scene_dir = os.path.join(base_dir, scene)
+            if not os.path.isdir(scene_dir):
+                # skip missing scene directories
+                # keep behavior quiet but informative
+                # (don't raise so dataset can be constructed in environments
+                # where the dataset isn't present)
+                continue
+            frames = set()
+            try:
+                for fname in os.listdir(scene_dir):
+                    m = frame_re.search(fname)
+                    if m:
+                        frames.add(int(m.group(1)))
+            except Exception:
+                # if listing fails for any reason, skip this scene
+                continue
+            for f in sorted(frames):
+                self.index.append((scene, f))
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        (scene, frame) = self.index[idx]
+        bufferStack = self.create_buffer_stack(scene, frame)
+        target = self.load_and_process_buffer(BufferType.HighQualityRender.value, scene, frame)
+        if self.transforms:
+            bufferStack = self.transforms(bufferStack)
+            target = self.transforms(target)
+        sample = {'bufferStack': bufferStack, 'target': target}
+        return sample
+
+    def load_and_process_buffer(self, buffer_name: str, scene: str, frame: int = 1):
+        """Cache loaded buffers to avoid re-reading files"""
+        PATH = f"synthetic_fur_images/images/with_ground_truth/{scene}/{buffer_name}{frame:04d}.png"
+        image_data = read_file(PATH)
+        image_tensor = decode_image(image_data)
+        image_tensor = image_tensor[:3, :, :]
+        return image_tensor
+
+    def create_buffer_stack(self, scene: str, frame: int = 1):
+        buffer_stack = []
+        for buffer in self.buffer_types:
+            image_tensor = self.load_and_process_buffer(buffer.value, scene, frame)
+            if buffer == BufferType.SceneDepth or buffer == BufferType.Mask:
+                image_tensor = image_tensor.float()
+                image_tensor = (image_tensor - image_tensor.min()) / (image_tensor.max() - image_tensor.min() + 1e-8)
+                image_tensor = (image_tensor * 255).to(torch.uint8)
+                image_tensor = image_tensor[:1]
+            buffer_stack.append(image_tensor)
+        return torch.cat(buffer_stack, dim=0)
