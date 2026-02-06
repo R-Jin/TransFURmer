@@ -19,10 +19,89 @@ class FurDataset(Dataset):
     def __init__(self, scenes: list[str], buffer_types: list[BufferType], transforms=None):
         self.scenes = scenes
         self.buffer_types = buffer_types
-        self.index: List[Tuple[str, int]] = []
-        self.transforms = transforms    # (e.g. Rescale, Normalize, Random Crops, Flips)
+        self.indexes: List[Tuple[str, int]] = self.__get_frames_for_scenes()
+        self.transforms = transforms    # (e.g. Rescale, Normalize, Random Crops, Flips) use torchvision.transforms.v2 as T
 
-        # Find all frames for each scene filling self.index with (scene, frame) tuples
+    def __len__(self):
+        return len(self.indexes)
+    
+    def __getitem__(self, idx):
+        scene, frame = self.indexes[idx]
+        one_channel_buffer_idx = []
+        buffers = [] 
+        
+        for i, buffer in enumerate(self.buffer_types):
+            image_tensor = self.load_and_process_buffer(buffer.value, scene, frame)
+            if buffer == BufferType.SceneDepth or buffer == BufferType.Mask:
+                one_channel_buffer_idx.append(i)
+            buffers.append(image_tensor)
+
+        # [C, H, W]
+        target = self.load_and_process_buffer(BufferType.HighQualityRender.value, scene, frame)
+
+        # [N_buffers + 1, C, H, W]
+        all_images = torch.stack(buffers + [target], dim=0)
+        
+
+        if self.transforms:
+            all_images = self.transforms(all_images)
+
+        buffer_stack = all_images[:-1]  # [N_buffers, C, H, W]
+        target = all_images[-1]         # [C, H, W]
+
+        for idx in one_channel_buffer_idx:
+            image_tensor = buffer_stack[idx]
+            image_tensor = self.__convert_to_one_channel(image_tensor)
+            # image_tensor = image_tensor.float()
+            # image_tensor = (image_tensor - image_tensor.min()) / (image_tensor.max() - image_tensor.min() + 1e-8)
+            # image_tensor = (image_tensor * 255).to(torch.uint8)
+            # image_tensor = image_tensor[:1]
+            buffer_stack[idx] = image_tensor
+
+        # Concatenate buffers along channel dimension
+        buffer_stack = torch.cat(list(buffer_stack), dim=0)  # [C_total, H, W]
+
+        return {'bufferStack': buffer_stack, 'target': target}
+
+    def load_and_process_buffer(self, buffer_name: str, scene: str, frame: int = 1):
+        """Cache loaded buffers to avoid re-reading files"""
+        PATH = f"synthetic_fur_images/images/with_ground_truth/{scene}/{buffer_name}{frame:04d}.png"
+        image_data = read_file(PATH)
+        image_tensor = decode_image(image_data)
+        image_tensor = image_tensor[:3, :, :]
+        return image_tensor
+
+    def create_buffer_stack(self, scene: str, frame: int = 1):
+        buffer_stack = []
+        for buffer in self.buffer_types:
+            image_tensor = self.load_and_process_buffer(buffer.value, scene, frame)
+
+            if self.transforms:
+                image_tensor = self.transforms(image_tensor)
+
+            if buffer == BufferType.SceneDepth or buffer == BufferType.Mask:
+                image_tensor = image_tensor.float()
+                image_tensor = (image_tensor - image_tensor.min()) / (image_tensor.max() - image_tensor.min() + 1e-8)
+                image_tensor = (image_tensor * 255).to(torch.uint8)
+                image_tensor = image_tensor[:1]
+            buffer_stack.append(image_tensor)
+        return torch.cat(buffer_stack, dim=0)
+
+    def __convert_to_one_channel(self, image_tensor):
+        """
+        Convert a multi-channel image tensor to a single channel by normalizing and scaling to [0, 255].
+        """
+        image_tensor = image_tensor.float()
+        image_tensor = (image_tensor - image_tensor.min()) / (image_tensor.max() - image_tensor.min() + 1e-8)
+        image_tensor = (image_tensor * 255).to(torch.uint8)
+        image_tensor = image_tensor[:1]
+        return image_tensor
+
+    def __get_frames_for_scenes(self):
+        """
+        Find all frames for each scene filling self.index with (scene, frame) tuples
+        """
+        indexes = []
         frame_re = re.compile(r"HighQualityRender(\d{4})\.png$") # Regex to match highquality render files and extract frame number
         base_dir = os.path.join("synthetic_fur_images", "images", "with_ground_truth")
         for scene in self.scenes:
@@ -43,37 +122,6 @@ class FurDataset(Dataset):
                 # if listing fails for any reason, skip this scene
                 continue
             for f in sorted(frames):
-                self.index.append((scene, f))
+                indexes.append((scene, f))
 
-    def __len__(self):
-        return len(self.index)
-
-    def __getitem__(self, idx):
-        (scene, frame) = self.index[idx]
-        bufferStack = self.create_buffer_stack(scene, frame)
-        target = self.load_and_process_buffer(BufferType.HighQualityRender.value, scene, frame)
-        if self.transforms:
-            bufferStack = self.transforms(bufferStack)
-            target = self.transforms(target)
-        sample = {'bufferStack': bufferStack, 'target': target}
-        return sample
-
-    def load_and_process_buffer(self, buffer_name: str, scene: str, frame: int = 1):
-        """Cache loaded buffers to avoid re-reading files"""
-        PATH = f"synthetic_fur_images/images/with_ground_truth/{scene}/{buffer_name}{frame:04d}.png"
-        image_data = read_file(PATH)
-        image_tensor = decode_image(image_data)
-        image_tensor = image_tensor[:3, :, :]
-        return image_tensor
-
-    def create_buffer_stack(self, scene: str, frame: int = 1):
-        buffer_stack = []
-        for buffer in self.buffer_types:
-            image_tensor = self.load_and_process_buffer(buffer.value, scene, frame)
-            if buffer == BufferType.SceneDepth or buffer == BufferType.Mask:
-                image_tensor = image_tensor.float()
-                image_tensor = (image_tensor - image_tensor.min()) / (image_tensor.max() - image_tensor.min() + 1e-8)
-                image_tensor = (image_tensor * 255).to(torch.uint8)
-                image_tensor = image_tensor[:1]
-            buffer_stack.append(image_tensor)
-        return torch.cat(buffer_stack, dim=0)
+        return indexes
