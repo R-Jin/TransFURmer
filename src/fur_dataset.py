@@ -5,6 +5,7 @@ import enum
 import os
 import re
 import torch
+from pathlib import Path
 
 class BufferType(str, enum.Enum):
     Rasterized = "Rasterized"
@@ -16,7 +17,8 @@ class BufferType(str, enum.Enum):
     HighQualityRender = "HighQualityRender"
     
 class FurDataset(Dataset):
-    def __init__(self, scenes: list[str], buffer_types: list[BufferType], transforms=None):
+    def __init__(self, base_path: Path, scenes: list[str], buffer_types: list[BufferType], transforms=None):
+        self.base_path = base_path
         self.scenes = scenes
         self.buffer_types = buffer_types
         self.indexes: List[Tuple[str, int]] = self.__get_frames_for_scenes()
@@ -52,10 +54,6 @@ class FurDataset(Dataset):
         for idx in one_channel_buffer_idx:
             image_tensor = buffer_stack[idx]
             image_tensor = self.__convert_to_one_channel(image_tensor)
-            # image_tensor = image_tensor.float()
-            # image_tensor = (image_tensor - image_tensor.min()) / (image_tensor.max() - image_tensor.min() + 1e-8)
-            # image_tensor = (image_tensor * 255).to(torch.uint8)
-            # image_tensor = image_tensor[:1]
             buffer_stack[idx] = image_tensor
 
         # Concatenate buffers along channel dimension
@@ -65,8 +63,8 @@ class FurDataset(Dataset):
 
     def load_and_process_buffer(self, buffer_name: str, scene: str, frame: int = 1):
         """Cache loaded buffers to avoid re-reading files"""
-        PATH = f"synthetic_fur_images/images/with_ground_truth/{scene}/{buffer_name}{frame:04d}.png"
-        image_data = read_file(PATH)
+        PATH = self.base_path / scene / f"{buffer_name}{frame:04d}.png"
+        image_data = read_file(str(PATH))
         image_tensor = decode_image(image_data)
         image_tensor = image_tensor[:3, :, :]
         return image_tensor
@@ -103,10 +101,10 @@ class FurDataset(Dataset):
         """
         indexes = []
         frame_re = re.compile(r"HighQualityRender(\d{4})\.png$") # Regex to match highquality render files and extract frame number
-        base_dir = os.path.join("synthetic_fur_images", "images", "with_ground_truth")
+        base_dir = self.base_path
         for scene in self.scenes:
-            scene_dir = os.path.join(base_dir, scene)
-            if not os.path.isdir(scene_dir):
+            scene_dir = base_dir / scene
+            if not scene_dir.is_dir():
                 # skip missing scene directories
                 # keep behavior quiet but informative
                 # (don't raise so dataset can be constructed in environments

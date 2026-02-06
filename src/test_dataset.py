@@ -1,3 +1,4 @@
+from pathlib import Path
 from fur_dataset import FurDataset, BufferType
 
 import matplotlib.pyplot as plt
@@ -9,7 +10,10 @@ transforms = T.Compose([
     # T.ColorJitter(brightness=20, contrast=0.2, saturation=0.2, hue=0.1),
     ])
 
+base_path=Path("data/synthetic_fur_images/images/with_ground_truth")
+
 test = FurDataset(
+        base_path=base_path,
         scenes=["bunny_3Lights_rotateUp", "bunny_3Lights_static"], 
         buffer_types=[BufferType.Rasterized, BufferType.SceneDepth], 
         transforms=transforms
