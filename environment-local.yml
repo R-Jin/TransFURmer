@@ -15,3 +15,4 @@ dependencies:
   - torchvision
   - torchaudio
   - cpuonly
+  - timm==0.4.12
