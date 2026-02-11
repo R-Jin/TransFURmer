@@ -17,10 +17,11 @@ class BufferType(str, enum.Enum):
     HighQualityRender = "HighQualityRender"
     
 class FurDataset(Dataset):
-    def __init__(self, base_path: Path, scenes: list[str], buffer_types: list[BufferType], transforms=None):
+    def __init__(self, base_path: Path, scenes: list[str], buffer_types: list[BufferType], stride: int = 1, transforms=None):
         self.base_path = base_path
         self.scenes = scenes
         self.buffer_types = buffer_types
+        self.stride = stride
         self.indexes: List[Tuple[str, int]] = self.__get_frames_for_scenes()
         self.transforms = transforms    # (e.g. Rescale, Normalize, Random Crops, Flips) use torchvision.transforms.v2 as T
 
@@ -97,10 +98,15 @@ class FurDataset(Dataset):
                     m = frame_re.search(fname)
                     if m:
                         frames.add(int(m.group(1)))
+
+                sorted_frames = sorted(list(frames))
+                final_frames = sorted_frames[::self.stride]  # Apply stride to select frames
+
+                for f in final_frames:
+                    indexes.append((scene, f))
+                
             except Exception:
                 # if listing fails for any reason, skip this scene
                 continue
-            for f in sorted(frames):
-                indexes.append((scene, f))
 
         return indexes
