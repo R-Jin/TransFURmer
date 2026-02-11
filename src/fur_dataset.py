@@ -59,6 +59,10 @@ class FurDataset(Dataset):
         # Concatenate buffers along channel dimension
         buffer_stack = torch.cat(list(buffer_stack), dim=0)  # [C_total, H, W]
 
+        # Convert to float32 and normalize for model input
+        buffer_stack = buffer_stack.float() / 255.0
+        target = target.float() / 255.0
+
         return {'bufferStack': buffer_stack, 'target': target}
 
     def load_and_process_buffer(self, buffer_name: str, scene: str, frame: int = 1):
