@@ -1,0 +1,16 @@
+Bootstrap: docker
+From: mambaorg/micromamba:latest
+
+%files
+    environment.yml /environment.yml
+
+%post
+    # Install the environment using micromamba (faster conda)
+    micromamba install -y -n base -f /environment.yml
+    micromamba clean --all -y
+
+%environment
+    export PATH="/opt/conda/bin:$PATH"
+
+%runscript
+    exec python "$@"

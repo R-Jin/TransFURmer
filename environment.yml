@@ -1,6 +1,7 @@
 name: minerva-env
 channels:
   - pytorch
+  - nvidia
   - conda-forge
   - defaults
 dependencies:
@@ -11,3 +12,8 @@ dependencies:
   # Libraries
   - numpy
   - matplotlib
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1  # Crucial: This tells conda to install the GPU kernels
+  - timm==0.4.12
