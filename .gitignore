@@ -3,3 +3,4 @@ synthetic_fur_images.zip
 *.png
 **/__pycache__/
 *.sif
+*.zip
