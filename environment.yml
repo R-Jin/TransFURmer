@@ -17,3 +17,12 @@ dependencies:
   - torchaudio
   - pytorch-cuda=12.1  # Crucial: This tells conda to install the GPU kernels
   - timm==0.4.12
+  - certifi
+  - ca-certificates
+  - openssl
+  - requests
+  - urllib3
+
+variables:
+  SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+  REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt

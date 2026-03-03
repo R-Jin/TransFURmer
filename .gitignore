@@ -4,3 +4,7 @@ synthetic_fur_images.zip
 **/__pycache__/
 training_images/
 *.sif
+*.zip
+/checkpoints/
+*.log
+*.csv
