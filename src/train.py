@@ -1,4 +1,3 @@
-from models.network_swinir import SwinIR
 from vgg import VGGPerceptualLoss
 import csv
 from fur_dataset import FurDataset, BufferType
@@ -8,7 +7,7 @@ import torchvision.transforms.v2 as T
 import torch
 from torch.amp import autocast, GradScaler
 from torch import nn
-
+from models.swinir_out3 import SwinIR_out3
 
 EPOCHS = 300
 
@@ -133,25 +132,10 @@ train_dataloader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_wo
 val_dataloader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers = 4, pin_memory=True)
 test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers = 4, pin_memory=True)
 
-class SwinIR_4to3(nn.Module):
-    def __init__(self, swinir):
-        super().__init__()
-        self.swinir = swinir
-        self.rgb_head = nn.Conv2d(
-            in_channels=train_dataset[0]['bufferStack'].shape[0],
-            out_channels=3,
-            kernel_size=3,
-            padding=1
-        )
-
-    def forward(self, x):
-        x = self.swinir(x)   # [B,4,H,W]
-        x = self.rgb_head(x) # [B,3,H,W]
-        return x
-
-swin = SwinIR(
+model = SwinIR_out3(
     upscale=1,
     in_chans=train_dataset[0]['bufferStack'].shape[0],
+    out_chans=3,
     img_size=crop_size[0],
     window_size=8,
     img_range=1.0,
@@ -160,8 +144,6 @@ swin = SwinIR(
     num_heads=[6, 6],
     mlp_ratio=2,
 ).to(device)
-
-model = SwinIR_4to3(swin).to(device)
 
 # First L1, then VGG perceptual loss
 l1_loss_fn = torch.nn.L1Loss() 
