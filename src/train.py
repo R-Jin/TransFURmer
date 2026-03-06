@@ -4,6 +4,7 @@ from fur_dataset import FurDataset, BufferType
 from pathlib import Path
 from torch.utils.data import DataLoader, random_split
 import torchvision.transforms.v2 as T
+import torchvision.utils as vutils
 import torch
 from torch.amp import autocast, GradScaler
 from torch import nn
@@ -13,7 +14,21 @@ EPOCHS = 300
 
 CHECKPOINT_DIR = Path("checkpoints")
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-CHECKPOINT_FREQ = 1
+CHECKPOINT_FREQ = 5
+
+COMPARISON_DIR = Path("comparisons")
+COMPARISON_DIR.mkdir(parents=True, exist_ok=True)
+COMPARISON_FREQ = 10  # Save comparison images every N epochs
+
+
+def save_comparison(pred, target, epoch, n_images=4):
+    """Save a side-by-side grid of predicted vs ground truth images."""
+    n = min(n_images, pred.shape[0])
+    pred_imgs = pred[:n].detach().cpu().clamp(0, 1)
+    gt_imgs = target[:n].detach().cpu().clamp(0, 1)
+    # Interleave: pred0, gt0, pred1, gt1, ...
+    pairs = torch.stack([pred_imgs, gt_imgs], dim=1).flatten(0, 1)  # [2n, C, H, W]
+    vutils.save_image(pairs, COMPARISON_DIR / f"epoch_{epoch:04d}.png", nrow=2)
 
 log_file = Path("training_log.csv")
 # Create header if it doesn't exist
@@ -37,7 +52,10 @@ def load_latest_checkpoint(model, optimizer=None, scheduler=None, scaler=None, c
     if optimizer and "optimizer" in state:
         optimizer.load_state_dict(state["optimizer"])
     if scheduler and "scheduler" in state:
-        scheduler.load_state_dict(state["scheduler"])
+        try:
+            scheduler.load_state_dict(state["scheduler"])
+        except KeyError:
+            print("Scheduler state not found in checkpoint. Starting scheduler from scratch.")
     if scaler and "scaler" in state:
         scaler.load_state_dict(state["scaler"])
 
@@ -128,9 +146,9 @@ test_dataset = FurDataset(
     transforms=test_transforms
 )
 
-train_dataloader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers = 4, pin_memory=True)
-val_dataloader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers = 4, pin_memory=True)
-test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers = 4, pin_memory=True)
+train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4, pin_memory=True)
+val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True)
+test_dataloader = DataLoader(test_dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True)
 
 model = SwinIR_out3(
     upscale=1,
@@ -139,19 +157,19 @@ model = SwinIR_out3(
     img_size=crop_size[0],
     window_size=8,
     img_range=1.0,
-    depths=[6, 6],
-    embed_dim=60,
-    num_heads=[6, 6],
-    mlp_ratio=2,
+    depths=[6, 6, 6, 6],
+    embed_dim=90,
+    num_heads=[6, 6, 6, 6],
+    mlp_ratio=4,
 ).to(device)
 
 # First L1, then VGG perceptual loss
 l1_loss_fn = torch.nn.L1Loss() 
 vgg_loss_fn = VGGPerceptualLoss(device)
-lambda_vgg = 0.1 # weight for perceptual loss
+lambda_vgg = 0.5 # weight for perceptual loss
 VGG_START_EPOCH = 65
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4, weight_decay = 1e-4, betas=(0.9, 0.99)) 
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay = 1e-4, betas=(0.9, 0.99), eps=1e-6) 
 
 steps_per_epoch = len(train_dataloader)
 total_steps = EPOCHS * steps_per_epoch
@@ -200,12 +218,12 @@ for epoch in range(start_epoch, EPOCHS):
         optimizer.zero_grad(set_to_none=True)
 
         # Forward pass
-        with autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+        with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
             pred = model(buffers)
             l1 = l1_loss_fn(pred, target)
 
         if epoch >= VGG_START_EPOCH:
-            with autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+            with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
                 vgg_loss = vgg_loss_fn(pred, target)
 
             loss_value = l1 + lambda_vgg * vgg_loss
@@ -228,7 +246,7 @@ for epoch in range(start_epoch, EPOCHS):
         if i % 100 == 0 or i == len(train_dataloader)-1:
             print(f"Epoch {epoch} | Batch {i+1}/{len(train_dataloader)} | "
                 f"Loss: {running_loss/(i+1):.6f}")
-    
+
     print(f"Epoch {epoch} | Train Loss: {running_loss / len(train_dataloader):.6f}")
 
     #### Validation ####
@@ -236,28 +254,26 @@ for epoch in range(start_epoch, EPOCHS):
     val_loss = 0.0
 
     with torch.inference_mode():
-        for sample in val_dataloader:
+        for i, sample in enumerate(val_dataloader):
             buffers = sample['bufferStack'].to(device, non_blocking=True)  # [B, num_buffers, H, W]
             target = sample['target'].to(device, non_blocking=True)        # [B, 3, H, W]
-            
-            # with autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-            #     pred = model(buffers)
-            #     loss_value = loss(pred, target)
 
-            with autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+            with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
                 pred = model(buffers)
                 l1 = l1_loss_fn(pred, target)
 
             if epoch >= VGG_START_EPOCH:
-                with autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+                with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
                     vgg_loss = vgg_loss_fn(pred, target)
 
                 loss_value = l1 + lambda_vgg * vgg_loss
             else:
                 loss_value = l1
-                
 
             val_loss += loss_value.item()
+
+            if i == 0 and epoch % COMPARISON_FREQ == 0:
+                save_comparison(pred, target, epoch)
 
     val_loss /= len(val_dataloader)
     print(f"Epoch {epoch} | Val Loss: {val_loss:.6f}")

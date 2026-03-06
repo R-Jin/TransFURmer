@@ -8,3 +8,4 @@ training_images/
 /checkpoints/
 *.log
 *.csv
+*.pth
