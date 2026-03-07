@@ -20,6 +20,8 @@ COMPARISON_DIR = Path("comparisons")
 COMPARISON_DIR.mkdir(parents=True, exist_ok=True)
 COMPARISON_FREQ = 10  # Save comparison images every N epochs
 
+crop_size = (64, 64)
+
 
 def save_comparison(pred, target, epoch, n_images=4):
     """Save a side-by-side grid of predicted vs ground truth images."""
@@ -74,9 +76,6 @@ base_path = Path("data/synthetic_fur_images/images/with_ground_truth")
 # sphere + torus = train (14 400 frames)
 # tube = test (1440 frames)
 # bunny = validation (1800 frames)
-
-
-crop_size = (128, 128)
 
 train_transforms = T.Compose([
     T.RandomCrop(size=crop_size),
