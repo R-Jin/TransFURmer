@@ -1,14 +1,11 @@
 from vgg import VGGPerceptualLoss
 import csv
-from fur_dataset import FurDataset, BufferType
 from pathlib import Path
-from torch.utils.data import DataLoader, random_split
-import torchvision.transforms.v2 as T
 import torchvision.utils as vutils
 import torch
 from torch.amp import autocast, GradScaler
-from torch import nn
 from models.swinir_out3 import SwinIR_out3
+from data import train_dataloader, val_dataloader, test_dataloader, crop_size, train_dataset
 
 EPOCHS = 300
 
@@ -63,93 +60,6 @@ def load_latest_checkpoint(model, optimizer=None, scheduler=None, scaler=None, c
     print(f"Loaded checkpoint '{latest}' (epoch {start_epoch})")
     return start_epoch
 
-# Creating dataset and dataloader
-base_path = Path("data/synthetic_fur_images/images/with_ground_truth")
-
-# Sphere = 12 scenes (train) (8640 frames)
-# Torus = 8 scenes (train) (5760 frames)
-# Tube = 2 scenes (test) (1440 frames)
-# Bunny = 3 scenes (validation) (1800 frames)
-
-# sphere + torus = train (14 400 frames)
-# tube = test (1440 frames)
-# bunny = validation (1800 frames)
-
-
-crop_size = (128, 128)
-
-train_transforms = T.Compose([
-    T.RandomCrop(size=crop_size),
-    T.RandomHorizontalFlip(p=0.5),
-    T.RandomVerticalFlip(p=0.5),
-])
-
-val_transforms = T.Compose([
-    T.CenterCrop(size=crop_size)
-])
-
-test_transforms = T.Compose([
-    T.CenterCrop(size=crop_size)
-])
-
-buffer_types = [BufferType.Rasterized, BufferType.SceneDepth, BufferType.LitPrimitive, BufferType.GuideColored, BufferType.WorldNormal]
-
-train_scenes = [
-    "sphere_3Lights_moveCW",
-    "sphere_3Lights_moveRL",
-    #"sphere_3Lights_sbPlateRL_static",
-    #"sphere_3Lights_sbPlateRotateUp_static",
-    "sphere_3Lights_static",
-    "sphere_fillLight_static",
-    #"sphere_hdriCapeHill_static",
-    #"sphere_hdriHansaplatz_static",
-    #"sphere_hdriMalibu_static",
-    #"sphere_hdriTopanga_static",
-    "sphere_keyLight_static",
-    "sphere_rimLight_static",
-    "torus_3Lights_moveCW",
-    "torus_3Lights_moveRL",
-    "torus_3Lights_rotateRightForward",
-    "torus_3Lights_rotateUp",
-    "torus_3Lights_static60",
-    #"torus_curly_clumpLarge_brown_3Lights_rotateRightForward",
-    #"torus_curly_clumpLarge_brown_3Lights_rotateUp",
-    #"torus_curly_clumpLarge_brown_3Lights_static60"
-]
-train_dataset = FurDataset(
-    base_path=base_path,
-    scenes=train_scenes, 
-    buffer_types=buffer_types, 
-    transforms=train_transforms
-)
-
-val_scenes = [
-    "tube_3Lights_rotateRight", "tube_3Lights_static"
-]
-val_dataset = FurDataset(
-    base_path=base_path,
-    scenes=val_scenes, 
-    buffer_types=buffer_types, 
-    transforms=val_transforms
-)
-
-test_scenes = [ 
-    "bunny_3Lights_rotateUp", 
-    "bunny_3Lights_static", 
-    "bunny_curly_clumpLarge_brown_3Lights_static"
-]
-
-test_dataset = FurDataset(
-    base_path=base_path,
-    scenes=test_scenes, 
-    buffer_types=buffer_types, 
-    transforms=test_transforms
-)
-
-train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4, pin_memory=True)
-val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True)
-test_dataloader = DataLoader(test_dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True)
-
 model = SwinIR_out3(
     upscale=1,
     in_chans=train_dataset[0]['bufferStack'].shape[0],
@@ -167,7 +77,23 @@ model = SwinIR_out3(
 l1_loss_fn = torch.nn.L1Loss() 
 vgg_loss_fn = VGGPerceptualLoss(device)
 lambda_vgg = 0.3 # weight for perceptual loss
-VGG_START_EPOCH = 65
+VGG_START_EPOCH = 60
+
+def fft_loss(pred, target, high_freq_weight=2.0):
+    # Cast to float32 for FFT (bfloat16 not supported)
+    pred = pred.float()
+    target = target.float()
+    f_pred = torch.fft.rfft2(pred, norm='ortho')
+    f_target = torch.fft.rfft2(target, norm='ortho')
+    # Create frequency weighting mask
+    H, W = pred.shape[-2:]
+    u = torch.fft.fftfreq(H, device=pred.device)[:, None].abs()   # [H, 1]
+    v = torch.fft.rfftfreq(W, device=pred.device)[None, :].abs()  # [1, W//2+1]
+    weight = 1 + high_freq_weight * (u**2 + v**2)  # shape [H, W//2+1]
+    # Loss on magnitude spectra
+    return (weight * (f_pred.abs() - f_target.abs()).abs()).mean()
+
+lambda_fft = 0.02 # weight for FFT loss
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay = 1e-4, betas=(0.9, 0.99), eps=1e-6) 
 
@@ -221,14 +147,14 @@ for epoch in range(start_epoch, EPOCHS):
         with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
             pred = model(buffers)
             l1 = l1_loss_fn(pred, target)
+            fft_val = fft_loss(pred, target)
+            loss_value = l1 + lambda_fft * fft_val
 
         if epoch >= VGG_START_EPOCH:
             with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
                 vgg_loss = vgg_loss_fn(pred, target)
 
-            loss_value = l1 + lambda_vgg * vgg_loss
-        else:
-            loss_value = l1
+            loss_value = loss_value + lambda_vgg * vgg_loss
     
         # Backward pass
         scaler.scale(loss_value).backward()
@@ -261,14 +187,14 @@ for epoch in range(start_epoch, EPOCHS):
             with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
                 pred = model(buffers)
                 l1 = l1_loss_fn(pred, target)
+                fft_val = fft_loss(pred, target)
+                loss_value = l1 + lambda_fft * fft_val
 
             if epoch >= VGG_START_EPOCH:
                 with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
                     vgg_loss = vgg_loss_fn(pred, target)
 
-                loss_value = l1 + lambda_vgg * vgg_loss
-            else:
-                loss_value = l1
+                loss_value = loss_value + lambda_vgg * vgg_loss
 
             val_loss += loss_value.item()
 
