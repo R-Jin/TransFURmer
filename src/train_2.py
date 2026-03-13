@@ -104,7 +104,7 @@ def gradient_loss(pred, target):
     target_dy = target[:, :, 1:, :] - target[:, :, :-1, :]
     return (pred_dx - target_dx).abs().mean() + (pred_dy - target_dy).abs().mean()
 
-lambda_grad = 0.1 # weight for gradient loss
+lambda_grad = 0.3 # weight for gradient loss
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay = 1e-4, betas=(0.9, 0.99), eps=1e-6) 
 
