@@ -95,6 +95,17 @@ def fft_loss(pred, target, high_freq_weight=2.0):
 
 lambda_fft = 0.02 # weight for FFT loss
 
+def gradient_loss(pred, target):
+    pred = pred.float()
+    target = target.float()
+    pred_dx = pred[:, :, :, 1:] - pred[:, :, :, :-1]
+    pred_dy = pred[:, :, 1:, :] - pred[:, :, :-1, :]
+    target_dx = target[:, :, :, 1:] - target[:, :, :, :-1]
+    target_dy = target[:, :, 1:, :] - target[:, :, :-1, :]
+    return (pred_dx - target_dx).abs().mean() + (pred_dy - target_dy).abs().mean()
+
+lambda_grad = 0.1 # weight for gradient loss
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay = 1e-4, betas=(0.9, 0.99), eps=1e-6) 
 
 steps_per_epoch = len(train_dataloader)
@@ -148,14 +159,15 @@ for epoch in range(start_epoch, EPOCHS):
             pred = model(buffers)
             l1 = l1_loss_fn(pred, target)
             fft_val = fft_loss(pred, target)
-            loss_value = l1 + lambda_fft * fft_val
+            grad_val = gradient_loss(pred, target)
+            loss_value = l1 + lambda_fft * fft_val + lambda_grad * grad_val
 
         if epoch >= VGG_START_EPOCH:
             with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
                 vgg_loss = vgg_loss_fn(pred, target)
 
             loss_value = loss_value + lambda_vgg * vgg_loss
-    
+
         # Backward pass
         scaler.scale(loss_value).backward()
 
@@ -188,7 +200,8 @@ for epoch in range(start_epoch, EPOCHS):
                 pred = model(buffers)
                 l1 = l1_loss_fn(pred, target)
                 fft_val = fft_loss(pred, target)
-                loss_value = l1 + lambda_fft * fft_val
+                grad_val = gradient_loss(pred, target)
+                loss_value = l1 + lambda_fft * fft_val + lambda_grad * grad_val
 
             if epoch >= VGG_START_EPOCH:
                 with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
