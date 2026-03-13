@@ -8,4 +8,4 @@
 #SBATCH --mem=32G
 
 # 1. Run the containerized training
-timeout 715m apptainer exec --nv env.sif python $1
+timeout 715m apptainer exec --nv env.sif python src/experiments/$1.py
