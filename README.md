@@ -34,6 +34,12 @@ Add or remove dependencies from `environment.yml` and then [build container](#bu
 conda env create -f environment-local.yml
 ```
 
+## Running experiments
+1. Create you experiment in `src/experiments`. 
+    - Remember to set experiment name in the file. 
+    - This contains your train loop. You can add a note to it see the other experiments.
+2. run `sbatch ./sbatch/run.sh EXP_NAME`. EXP_NAME is the filename without the file extension.
+
 # Note
 Might not be good to downsize whole image to 128x128 because fur strands details will be non existent making it look blurry. This might confuse model and undo high fidelity fur texture.
 
