@@ -9,3 +9,4 @@ training_images/
 *.log
 *.csv
 *.pth
+/archive

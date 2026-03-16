@@ -7,8 +7,11 @@ import torchvision.utils as vutils
 
 from data import test_dataloader, crop_size, train_dataset
 
+# CHECKPOINT_DIR = Path("checkpoints")
 CHECKPOINT_DIR = Path("checkpoints")
-PATH = "checkpoints/checkpoint_95.pth"
+PATH = "archive/exp_01/checkpoints"
+# PATH = "/checkpoints"
+# PATH = "archive/exp_02/checkpoints"
 OUTPUT_DIR = Path("stitch_test_outputs")
 OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -51,7 +54,7 @@ model = SwinIR_out3(
 ).to(device)
 
 print(f"Loading model weights from {PATH}...")
-load_latest_checkpoint(model, checkpoint_dir=Path(PATH).parent, device=device)
+load_latest_checkpoint(model, checkpoint_dir=Path(PATH), device=device)
 
 print("Model loaded successfully.")
 model.eval()

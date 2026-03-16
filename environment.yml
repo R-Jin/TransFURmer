@@ -22,6 +22,7 @@ dependencies:
   - openssl
   - requests
   - urllib3
+  - torchmetrics
 
 variables:
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt

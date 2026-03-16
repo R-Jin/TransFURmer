@@ -1,19 +1,45 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from vgg import VGGPerceptualLoss
 import csv
-from pathlib import Path
 import torchvision.utils as vutils
 import torch
 from torch.amp import autocast, GradScaler
 from models.swinir_out3 import SwinIR_out3
 from data import train_dataloader, val_dataloader, test_dataloader, crop_size, train_dataset
+from torchmetrics.functional import structural_similarity_index_measure as ssim
 
 EPOCHS = 300
 
-EXPERIMENT_ID = "exp_01"  # Change this for each training run
+EXPERIMENT_ID = "exp_02"  # Change this for each training run
+NOTE = """
+Data transformations are 
+T.RandomCrop(size=crop_size),
+T.RandomHorizontalFlip(p=0.5),
+T.RandomVerticalFlip(p=0.5),
+
+-------------------
+Epoch 0 - Epoch VGG_START 
+-------------------
+lambda_grad = 0.3
+l1 = 1.0
+SSIM = 0.1 This encourages better general lighting
+VGG_START = 80
+
+-------------------
+Epoch VGG_START - Epoch ???
+-------------------
+lambda_grad = 0.3
+lambda_l1 = 0.6
+lambda_vgg = 0.3 
+"""
 
 EXPERIMENT_DIR = Path("archive") / EXPERIMENT_ID
 CHECKPOINT_DIR = EXPERIMENT_DIR / "checkpoints"
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+(EXPERIMENT_DIR / "note.txt").write_text(NOTE.strip())
 CHECKPOINT_FREQ = 5
 
 COMPARISON_DIR = EXPERIMENT_DIR / "comparisons"
@@ -80,23 +106,11 @@ model = SwinIR_out3(
 l1_loss_fn = torch.nn.L1Loss() 
 vgg_loss_fn = VGGPerceptualLoss(device)
 lambda_vgg = 0.3 # weight for perceptual loss
-VGG_START_EPOCH = 60
+VGG_START_EPOCH = 80
 
-def fft_loss(pred, target, high_freq_weight=2.0):
-    # Cast to float32 for FFT (bfloat16 not supported)
-    pred = pred.float()
-    target = target.float()
-    f_pred = torch.fft.rfft2(pred, norm='ortho')
-    f_target = torch.fft.rfft2(target, norm='ortho')
-    # Create frequency weighting mask
-    H, W = pred.shape[-2:]
-    u = torch.fft.fftfreq(H, device=pred.device)[:, None].abs()   # [H, 1]
-    v = torch.fft.rfftfreq(W, device=pred.device)[None, :].abs()  # [1, W//2+1]
-    weight = 1 + high_freq_weight * (u**2 + v**2)  # shape [H, W//2+1]
-    # Loss on magnitude spectra
-    return (weight * (f_pred.abs() - f_target.abs()).abs()).mean()
-
-lambda_fft = 0.02 # weight for FFT loss
+def ssim_loss(pred, target):
+    return 1 - ssim(pred.float(), target.float(), data_range=1.0)
+lambda_ssim = 0.2
 
 def gradient_loss(pred, target):
     pred = pred.float()
@@ -161,9 +175,9 @@ for epoch in range(start_epoch, EPOCHS):
         with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
             pred = model(buffers)
             l1 = l1_loss_fn(pred, target)
-            fft_val = fft_loss(pred, target)
             grad_val = gradient_loss(pred, target)
-            loss_value = l1 + lambda_fft * fft_val + lambda_grad * grad_val
+            ssim_val = ssim_loss(pred, target)
+            loss_value = l1 + lambda_grad * grad_val + lambda_ssim * ssim_val
 
         if epoch >= VGG_START_EPOCH:
             with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
@@ -202,9 +216,9 @@ for epoch in range(start_epoch, EPOCHS):
             with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
                 pred = model(buffers)
                 l1 = l1_loss_fn(pred, target)
-                fft_val = fft_loss(pred, target)
                 grad_val = gradient_loss(pred, target)
-                loss_value = l1 + lambda_fft * fft_val + lambda_grad * grad_val
+                ssim_val = ssim_loss(pred, target)
+                loss_value = l1 + lambda_grad * grad_val + lambda_ssim * ssim_val
 
             if epoch >= VGG_START_EPOCH:
                 with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda')):
